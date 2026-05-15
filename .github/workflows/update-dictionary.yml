@@ -1,0 +1,71 @@
+name: Update Yomitan Dictionary
+
+on:
+  schedule:
+    - cron: '0 0 * * *' # Runs every day at midnight UTC
+  workflow_dispatch: # Allows you to run it manually from the Actions tab
+
+permissions:
+  contents: write # Required to push the JSON and create Releases
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests beautifulsoup4
+
+      - name: Run Scraper (Ripper.py)
+        run: python Ripper.py
+
+      - name: Check for changes and commit JSON
+        id: check_changes
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add japanese_slang_dict.json
+          
+          if git diff --staged --quiet; then
+            echo "No new slang entries found. Up to date."
+            echo "changed=false" >> $GITHUB_OUTPUT
+          else
+            echo "New slang entries found. Committing to repo..."
+            git commit -m "Auto-update dictionary: $(date -u +'%Y-%m-%d')"
+            git push
+            echo "changed=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run Convertor (Convertor.py)
+        # We only run the convertor if new words were found, OR if you triggered it manually.
+        if: steps.check_changes.outputs.changed == 'true' || github.event_name == 'workflow_dispatch'
+        run: |
+          python Convertor.py
+          # Convertor.py generates "Scripting_Japan_Slang.zip" but Yomitan 
+          # expects "dictionary.zip" based on the download URL in your code.
+          mv Scripting_Japan_Slang.zip dictionary.zip
+
+      - name: Generate Release Tag
+        if: steps.check_changes.outputs.changed == 'true' || github.event_name == 'workflow_dispatch'
+        run: echo "DATE_TAG=$(date -u +'%Y-%m-%d_%H-%M-%S')" >> $GITHUB_ENV
+
+      - name: Create Release for Yomitan
+        if: steps.check_changes.outputs.changed == 'true' || github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "v${{ env.DATE_TAG }}"
+          name: "Dictionary Update ${{ env.DATE_TAG }}"
+          files: |
+            index.json
+            dictionary.zip
+          make_latest: true # This makes the URLs end in "/releases/latest/download/..." exactly as your Python script expects!
