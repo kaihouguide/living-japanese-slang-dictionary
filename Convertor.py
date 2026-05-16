@@ -50,7 +50,6 @@ def parse_term_and_readings(term_raw, readings_raw):
     Extracts embedded readings, then splits and cleans all variations.
     """
     # 1. Check if reading is hidden at the end of the term in parentheses
-    # e.g., "KSK (かそく or ケーエスケー)"
     match = re.search(r'\s*[\(（]([^\)）]+)[\)）]$', term_raw)
     
     term_to_split = term_raw
@@ -108,16 +107,13 @@ def create_dictionary(input_file, output_zip):
         content_nodes = []
 
         # 0. Header Node (Displays the Absolute Original Term)
-        # Because we stripped things like [NOUN] for lookup matching, 
-        # we display the raw term here so the user doesn't lose context.
         content_nodes.append({
             "tag": "div",
             "style": {
-                "fontSize": "1.1em",
+                "fontSize": "1.2em",
                 "fontWeight": "bold",
                 "marginBottom": "10px",
-                "borderBottom": "1px solid #888", # Subtle underline
-                "paddingBottom": "4px"
+                "color": "#e0e0e0" # Optional: Makes the header stand out nicely on dark modes
             },
             "content": original_term
         })
@@ -133,7 +129,7 @@ def create_dictionary(input_file, output_zip):
                     "tag": "span",
                     "style": {
                         "color": "#ffffff",
-                        "backgroundColor": "#5c6bc0", # Indigo background
+                        "backgroundColor": "#5c6bc0", 
                         "padding": "3px 8px",
                         "fontWeight": "bold",
                         "fontSize": "13px"
@@ -173,7 +169,7 @@ def create_dictionary(input_file, output_zip):
                         "tag": "span",
                         "style": {
                             "color": "#ffffff",
-                            "backgroundColor": "#4caf50", # Bright green badge
+                            "backgroundColor": "#4caf50", 
                             "padding": "2px 6px",
                             "fontSize": "12px",
                             "fontWeight": "bold",
@@ -194,7 +190,7 @@ def create_dictionary(input_file, output_zip):
                         "tag": "div",
                         "style": {
                             "marginTop": "6px",
-                            "marginLeft": "32px", # Indents past the "Ex" badge
+                            "marginLeft": "32px", 
                             "fontSize": "13px",
                             "fontStyle": "italic" 
                         },
