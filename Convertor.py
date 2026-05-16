@@ -4,10 +4,6 @@ import zipfile
 import os
 from datetime import datetime
 
-def clean_term(term):
-    # Removes trailing parenthesis readings
-    return re.sub(r'\s*[\(（][^\)）]+[\)）]$', '', term).strip()
-
 def parse_example(ex_string):
     """
     Extracts the English translation from the end of the Japanese example.
@@ -21,6 +17,70 @@ def parse_example(ex_string):
         return jp_text, eng_text
     return ex_string, ""
 
+def split_and_clean(text):
+    """
+    Splits text by delimiters (or, both, often, ・, /, ,) 
+    and cleans out brackets, quotes, and tildes to ensure clean Yomitan lookups.
+    """
+    if not text:
+        return []
+    
+    text = str(text)
+    
+    # Split by common slang delimiters
+    parts = re.split(r'\s+(?:or|both|often)\s+|\s*・\s*|\s*,\s*|\s*\/\s*|\s*｜\s*', text)
+    
+    cleaned = []
+    for p in parts:
+        # Remove variable brackets like [NOUN], [A]
+        p = re.sub(r'\[.*?\]', '', p)
+        p = re.sub(r'【.*?】', '', p)
+        # Remove quotes and tildes
+        p = re.sub(r'[「」\'"〜~〰]', '', p)
+        # Clean whitespace
+        p = p.strip()
+        if p:
+            cleaned.append(p)
+            
+    # Return list of unique parts while preserving order
+    return list(dict.fromkeys(cleaned))
+
+def parse_term_and_readings(term_raw, readings_raw):
+    """
+    Extracts embedded readings, then splits and cleans all variations.
+    """
+    # 1. Check if reading is hidden at the end of the term in parentheses
+    # e.g., "KSK (かそく or ケーエスケー)"
+    match = re.search(r'\s*[\(（]([^\)）]+)[\)）]$', term_raw)
+    
+    term_to_split = term_raw
+    if match:
+        extracted_reading = match.group(1).strip()
+        term_to_split = term_raw[:match.start()].strip()
+        
+        # If no readings were provided in the JSON, use the extracted one
+        if not readings_raw or (isinstance(readings_raw, list) and not any(readings_raw)):
+            readings_raw = extracted_reading
+
+    # 2. Split and clean the terms
+    terms = split_and_clean(term_to_split)
+    
+    # 3. Format and split the readings
+    if isinstance(readings_raw, list):
+        # Filter out empty entries and join with 'or' to pipe into our standard parser
+        valid_readings = [str(r) for r in readings_raw if r]
+        readings_str = " or ".join(valid_readings)
+    else:
+        readings_str = str(readings_raw) if readings_raw else ""
+        
+    readings = split_and_clean(readings_str)
+    
+    # Yomitan requires at least an empty string for the reading
+    if not readings:
+        readings = [""]
+        
+    return terms, readings
+
 def create_dictionary(input_file, output_zip):
     repo = os.environ.get("GITHUB_REPOSITORY", "YOUR_USERNAME/YOUR_REPO")
     index_url = f"https://github.com/{repo}/releases/latest/download/index.json"
@@ -33,19 +93,34 @@ def create_dictionary(input_file, output_zip):
     seq = 1
 
     for item in data:
-        term_raw = item.get("term", "")
-        if not term_raw:
+        original_term = item.get("term", "")
+        if not original_term:
             continue
 
-        term = clean_term(term_raw)
-        readings = item.get("readings", [])
-
-        if isinstance(readings, str):
-            readings = [readings.strip()] if readings.strip() else [""]
-        elif not readings:
-            readings = [""]
+        readings_raw = item.get("readings", [])
+        
+        # Parse, clean, and generate all term/reading variations
+        terms, readings = parse_term_and_readings(original_term, readings_raw)
+        
+        if not terms:
+            continue
 
         content_nodes = []
+
+        # 0. Header Node (Displays the Absolute Original Term)
+        # Because we stripped things like [NOUN] for lookup matching, 
+        # we display the raw term here so the user doesn't lose context.
+        content_nodes.append({
+            "tag": "div",
+            "style": {
+                "fontSize": "1.1em",
+                "fontWeight": "bold",
+                "marginBottom": "10px",
+                "borderBottom": "1px solid #888", # Subtle underline
+                "paddingBottom": "4px"
+            },
+            "content": original_term
+        })
 
         # 1. Part of Speech / Type (Compact Colored Badge)
         item_type = item.get("type", [])
@@ -121,7 +196,7 @@ def create_dictionary(input_file, output_zip):
                             "marginTop": "6px",
                             "marginLeft": "32px", # Indents past the "Ex" badge
                             "fontSize": "13px",
-                            "fontStyle": "italic" # Replaced the illegal 'opacity' property with italic text
+                            "fontStyle": "italic" 
                         },
                         "content": eng_text
                     })
@@ -169,9 +244,11 @@ def create_dictionary(input_file, output_zip):
             }
         }]
 
-        for reading in readings:
-            row = [term, reading, "", "", 0, glossary, seq, ""]
-            term_bank.append(row)
+        # Create row entries for ALL combinations of Terms and Readings
+        for t in terms:
+            for r in readings:
+                row = [t, r, "", "", 0, glossary, seq, ""]
+                term_bank.append(row)
 
         seq += 1
 
