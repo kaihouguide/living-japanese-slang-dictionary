@@ -17,68 +17,93 @@ def parse_example(ex_string):
         return jp_text, eng_text
     return ex_string, ""
 
-def split_and_clean(text):
-    """
-    Splits text by delimiters (or, both, often, ・, /, ,) 
-    and cleans out brackets, quotes, and tildes to ensure clean Yomitan lookups.
-    """
-    if not text:
-        return []
-    
-    text = str(text)
-    
-    # Split by common slang delimiters
-    parts = re.split(r'\s+(?:or|both|often)\s+|\s*・\s*|\s*,\s*|\s*\/\s*|\s*｜\s*', text)
-    
-    cleaned = []
-    for p in parts:
-        # Remove variable brackets like [NOUN], [A]
-        p = re.sub(r'\[.*?\]', '', p)
-        p = re.sub(r'【.*?】', '', p)
-        # Remove quotes and tildes
-        p = re.sub(r'[「」\'"〜~〰]', '', p)
-        # Clean whitespace
-        p = p.strip()
-        if p:
-            cleaned.append(p)
-            
-    # Return list of unique parts while preserving order
-    return list(dict.fromkeys(cleaned))
-
 def parse_term_and_readings(term_raw, readings_raw):
-    """
-    Extracts embedded readings, then splits and cleans all variations.
-    """
-    # 1. Check if reading is hidden at the end of the term in parentheses
+    term_raw = str(term_raw).strip()
+    
+    # 1. Extract parenthetical reading at the end of term_raw
     match = re.search(r'\s*[\(（]([^\)）]+)[\)）]$', term_raw)
-    
-    term_to_split = term_raw
+    extracted_reading = None
     if match:
-        extracted_reading = match.group(1).strip()
-        term_to_split = term_raw[:match.start()].strip()
+        possible_reading = match.group(1).strip()
+        # Check if the extracted string contains Kanji; if it does, it's likely a part 
+        # of the term (like スイーツ（笑）), NOT a reading.
+        if not re.search(r'[一-龥]', possible_reading):
+            extracted_reading = possible_reading
+            term_raw = term_raw[:match.start()].strip()
+            
+    # If no readings were provided in the JSON, use the extracted one
+    if not readings_raw or (isinstance(readings_raw, list) and not any(readings_raw)):
+        if extracted_reading:
+            readings_raw = [extracted_reading]
+        else:
+            readings_raw = []
+            
+    # Normalize string reading to a list
+    if isinstance(readings_raw, str):
+        readings_raw = [readings_raw]
         
-        # If no readings were provided in the JSON, use the extracted one
-        if not readings_raw or (isinstance(readings_raw, list) and not any(readings_raw)):
-            readings_raw = extracted_reading
-
-    # 2. Split and clean the terms
-    terms = split_and_clean(term_to_split)
+    filtered_readings = []
+    for r in readings_raw:
+        r_str = str(r).strip()
+        if not r_str:
+            continue
+        # Filter out false readings misidentified as readings in the JSON due to parenthesis
+        # e.g., ignoring "が" from "腐臭(が)する" or "^Д^" from "m9(^Д^)ﾌﾟｷﾞｬｰ"
+        if f"({r_str})" in term_raw or f"（{r_str}）" in term_raw:
+            continue
+        filtered_readings.append(r_str)
+        
+    cleaned_readings = []
+    for r in filtered_readings:
+        # Remove English modifiers like "often", "both", "usually"
+        c = re.sub(r'^(often|both|usually)\s+', '', r, flags=re.IGNORECASE).strip()
+        # Split merged readings by common delimiters
+        sub_r = re.split(r'\s+(?:or|both|often)\s+|\s*・\s*|\s*,\s*|\s*\/\s*|\s*｜\s*', c)
+        for sr in sub_r:
+            sr = sr.strip()
+            if sr:
+                cleaned_readings.append(sr)
+                
+    if not cleaned_readings:
+        cleaned_readings = [""]
+        
+    # Check for cases where phrases are delimited by standard Japanese comma `、`
+    # E.g., `横を見るな、推しを見ろ` -> length 2. If reading list is length 2, join them!
+    term_comma_parts = [p.strip() for p in term_raw.split('、') if p.strip()]
+    if '、' in term_raw and len(term_comma_parts) == len(cleaned_readings) and len(cleaned_readings) > 1:
+        cleaned_readings = ['、'.join(cleaned_readings)]
+        
+    # Split term by brackets \[.*?\] or 【.*?】 
+    # (By splitting rather than deleting, this creates two distinct terms "もうやめて" and "のライフはゼロよ！" 
+    # making them both natively scannable in Yomitan instead of mangled).
+    bracket_parts = [p.strip() for p in re.split(r'\[.*?\]|【.*?】', term_raw) if p.strip()]
     
-    # 3. Format and split the readings
-    if isinstance(readings_raw, list):
-        # Filter out empty entries and join with 'or' to pipe into our standard parser
-        valid_readings = [str(r) for r in readings_raw if r]
-        readings_str = " or ".join(valid_readings)
+    final_terms = []
+    for bp in bracket_parts:
+        # Split terms by actual synonym delimiters 
+        # (Excluding commas as those are handled appropriately or belong to English quotes inside terms)
+        synonyms = re.split(r'\s+(?:or|both|often)\s+|\s*・\s*|\s*\/\s*|\s*｜\s*', bp)
+        for syn in synonyms:
+            syn = re.sub(r'[「」\'"〜~〰]', '', syn).strip()
+            if syn:
+                final_terms.append(syn)
+                
+    # Remove duplicates but preserve logical order
+    final_terms = list(dict.fromkeys(final_terms))
+    cleaned_readings = list(dict.fromkeys(cleaned_readings))
+    
+    pairs = []
+    # If the amount of distinct synonym terms equals the exact amount of distinct readings, match them 1-to-1.
+    if len(final_terms) == len(cleaned_readings) and len(final_terms) > 1:
+        for t, r in zip(final_terms, cleaned_readings):
+            pairs.append((t, r))
     else:
-        readings_str = str(readings_raw) if readings_raw else ""
-        
-    readings = split_and_clean(readings_str)
-    
-    # Yomitan requires at least an empty string for the reading
-    if not readings:
-        readings = [""]
-        
-    return terms, readings
+        # Otherwise, fall back to linking permutations (Cartesian product)
+        for t in final_terms:
+            for r in cleaned_readings:
+                pairs.append((t, r))
+                
+    return pairs
 
 def create_dictionary(input_file, output_zip):
     repo = os.environ.get("GITHUB_REPOSITORY", "YOUR_USERNAME/YOUR_REPO")
@@ -98,10 +123,10 @@ def create_dictionary(input_file, output_zip):
 
         readings_raw = item.get("readings", [])
         
-        # Parse, clean, and generate all term/reading variations
-        terms, readings = parse_term_and_readings(original_term, readings_raw)
+        # Parse, clean, and generate all correctly paired term/reading variations
+        pairs = parse_term_and_readings(original_term, readings_raw)
         
-        if not terms:
+        if not pairs:
             continue
 
         content_nodes = []
@@ -113,7 +138,7 @@ def create_dictionary(input_file, output_zip):
                 "fontSize": "1.2em",
                 "fontWeight": "bold",
                 "marginBottom": "10px",
-                "color": "#e0e0e0" # Optional: Makes the header stand out nicely on dark modes
+                "color": "#e0e0e0" 
             },
             "content": original_term
         })
@@ -240,11 +265,10 @@ def create_dictionary(input_file, output_zip):
             }
         }]
 
-        # Create row entries for ALL combinations of Terms and Readings
-        for t in terms:
-            for r in readings:
-                row = [t, r, "", "", 0, glossary, seq, ""]
-                term_bank.append(row)
+        # Append using the strictly paired outputs
+        for t, r in pairs:
+            row = [t, r, "", "", 0, glossary, seq, ""]
+            term_bank.append(row)
 
         seq += 1
 
